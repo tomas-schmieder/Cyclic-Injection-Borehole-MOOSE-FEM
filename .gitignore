@@ -1,0 +1,35 @@
+# Simulation output — regenerate with scripts/run_all.sh.
+# A full sweep is roughly 5 GB (12 cases x ~460 MB, plus a 4.5 GB refinement run).
+results/
+
+# MOOSE / libMesh build products
+*-opt
+*-dbg
+*-oprof
+*-devel
+lib/
+build/
+.libs/
+*.o
+*.lo
+*.lo.d
+*.la
+*.a
+*.dylib
+*.so
+
+# Exodus / checkpoint output, wherever it lands
+*.e
+*.e-s*
+*_cp/
+
+# rpath workaround shim (scripts/fix_macos_rpaths.sh)
+.rpath-shim/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
