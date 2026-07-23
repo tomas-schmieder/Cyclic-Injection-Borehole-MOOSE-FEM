@@ -19,11 +19,11 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_PREFIX="${CONDA_PREFIX:-$HOME/miniforge/envs/moose}"
+ENV_PREFIX="${CONDA_PREFIX:-${MINIFORGE_ROOT:-$HOME/miniforge}/envs/${MOOSE_ENV:-moose}}"
 SHIM="$REPO/.rpath-shim"
 
 if [ ! -d "$ENV_PREFIX/lib" ]; then
-  echo "error: no lib/ under $ENV_PREFIX — activate the moose env or set CONDA_PREFIX" >&2
+  echo "error: no lib/ under $ENV_PREFIX — activate the moose env (source scripts/env.sh) or set CONDA_PREFIX" >&2
   exit 1
 fi
 

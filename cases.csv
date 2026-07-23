@@ -1,0 +1,13 @@
+case,permeability,dt,nl_abs_tol,nl_max_its,archive_stride,label,description
+base,1E-13 5E-14 0   5E-14 1E-13 0   0 0 1E-13,0.5,1e-5,100,1,Base (cross-coupled),reference case; 5e-14 off-diagonal coupling
+high_gravel,1E-10 0 0   0 1E-10 0   0 0 0,0.5,1e-5,100,1,1e-10,gravel
+medium_sand,1E-13 0 0   0 1E-13 0   0 0 0,0.5,1e-5,100,1,1e-13,medium sand
+low_silt,1E-16 0 0   0 1E-16 0   0 0 0,0.5,1e-5,100,1,1e-16,silt
+very_low_clay,1E-20 0 0   0 1E-20 0   0 0 0,0.5,1e-5,100,1,1e-20,clay; effectively impermeable
+very_high_karst,1E-7  0 0   0 1E-7  0   0 0 0,0.5,1e-5,100,1,1e-7,karst
+extreme_1e-3,1E-3  0 0   0 1E-3  0   0 0 0,0.5,1e-5,100,1,1e-3,non-physical upper bound; brackets the response
+anisotropic_x_high,1E-10 0 0   0 1E-15 0   0 0 0,0.5,1e-5,100,1,X High,flow channelled along x
+anisotropic_y_high,1E-15 0 0   0 1E-10 0   0 0 1E-00,0.5,1e-5,100,1,Y High,flow channelled along y; kzz=1 is unused in 2D but preserved from the original
+cross_coupled,1E-13 1E-13 0   1E-13 1E-13 0   0 0 0,0.5,1e-5,100,1,Cross-Coupled,fully cross-coupled tensor
+y_blocked,1E-13 0 0   0 1E-20 0   0 0 0,0.5,1e-5,100,1,Y Blocked,vertical flow suppressed
+very_low_clay_dt0.05,1E-20 0 0   0 1E-20 0   0 0 0,0.05,1e-7,200,10,1e-20 (dt refinement),timestep refinement of very_low_clay; 20000 steps

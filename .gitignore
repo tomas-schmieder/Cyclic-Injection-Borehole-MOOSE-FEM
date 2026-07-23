@@ -1,5 +1,5 @@
-# Simulation output — regenerate with scripts/run_all.sh.
-# A full sweep is roughly 5 GB (12 cases x ~460 MB, plus a 4.5 GB refinement run).
+# Raw simulation output. Regenerate with scripts/run.sh; it is folded into
+# data/*.npz (which IS committed) and then deleted automatically.
 results/
 
 # MOOSE / libMesh build products
@@ -18,12 +18,12 @@ build/
 *.dylib
 *.so
 
-# Exodus / checkpoint output, wherever it lands
+# Exodus field output and checkpoints, wherever they land
 *.e
 *.e-s*
 *_cp/
 
-# rpath workaround shim (scripts/fix_macos_rpaths.sh)
+# macOS rpath workaround (scripts/fix_macos_rpaths.sh)
 .rpath-shim/
 
 # Python
