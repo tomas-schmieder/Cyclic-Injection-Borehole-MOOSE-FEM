@@ -66,6 +66,251 @@ cycles run over the 1000 s simulation:
 | **Size** | 5,214 nonlinear DOFs, 40,152 auxiliary DOFs |
 | **Sampling** | six `LineValueSampler`s at y = 12.5 m, 30 points each |
 
+## Governing equations
+
+The model is **Biot linear poroelasticity**: a linear-elastic porous solid whose pores are
+fully saturated with a slightly compressible fluid, with two-way coupling between the fluid
+pressure and the solid deformation. MOOSE's `PorousFlowFullySaturated` action assembles the
+coupled system below; nothing about the physics is custom to this repository.
+
+Two fields are solved for simultaneously: the pore pressure $p(\mathbf{x},t)$ and the solid
+displacement $\mathbf{u}(\mathbf{x},t) = (u_x, u_y)$.
+
+### 1. Mechanical equilibrium
+
+Inertia is negligible on these timescales, so the solid obeys quasi-static equilibrium.
+Gravity is switched off in the model, leaving
+
+$$
+\nabla \cdot \sigma = \mathbf{0},
+$$
+
+where $\sigma$ is the **total** Cauchy stress (tension positive). Biot's effective-stress
+principle splits the total stress into the part carried by the solid skeleton, $\sigma'$,
+and the part carried by the pore fluid:
+
+$$
+\sigma = \sigma' - \alpha\, p\, \mathbf{I},
+$$
+
+with $\alpha$ the **Biot coefficient** ($\alpha = 1$ here). The skeleton is linear elastic
+under the small-strain assumption:
+
+$$
+\sigma' = \mathbb{C} : \varepsilon
+= 2G\,\varepsilon + \lambda\,\mathrm{tr}(\varepsilon)\,\mathbf{I},
+\qquad
+\varepsilon = \tfrac{1}{2}\!\left(\nabla \mathbf{u} + \nabla \mathbf{u}^{\top}\right),
+$$
+
+where $G$ is the shear modulus and $\lambda = K - \tfrac{2}{3}G$ the first Lamé parameter.
+Substituting gives the mechanical equation actually solved:
+
+$$
+\nabla \cdot \left(\mathbb{C} : \varepsilon\right) - \alpha\, \nabla p = \mathbf{0}.
+$$
+
+The second term is the route by which **pressure drives deformation**.
+
+### 2. Fluid mass conservation
+
+Conservation of fluid mass for a fully saturated pore space, linearised about the reference
+state, gives the **storage equation**:
+
+$$
+\underbrace{\frac{1}{M}\frac{\partial p}{\partial t}}_{\text{fluid + pore compressibility}}
++ \underbrace{\alpha\,\frac{\partial \varepsilon_v}{\partial t}}_{\text{skeleton dilation}}
++ \nabla \cdot \mathbf{q} = Q,
+$$
+
+where $\varepsilon_v = \mathrm{tr}(\varepsilon) = \nabla\cdot\mathbf{u}$ is the volumetric
+strain, $Q$ a source/sink, and $1/M$ the **Biot modulus** — the amount of fluid that can be
+squeezed into a unit volume held at constant strain per unit pressure rise:
+
+$$
+\frac{1}{M} = \frac{\phi}{K_f} + \frac{\alpha - \phi}{K_s}
+\;\xrightarrow{\ \alpha = 1\ (K_s \to \infty)\ }\;
+\frac{\phi}{K_f}.
+$$
+
+The $\alpha\,\partial\varepsilon_v/\partial t$ term is the route by which **deformation drives
+pressure**: compressing the skeleton pressurises the fluid. Fluid flux follows Darcy's law
+(gravity off):
+
+$$
+\mathbf{q} = -\frac{k}{\mu}\,\nabla p,
+$$
+
+with $k$ the intrinsic permeability (m², the tensor swept in this study) and $\mu$ the fluid
+viscosity. Combining the two gives the pressure-diffusion equation with its mechanical
+coupling term:
+
+$$
+\frac{1}{M}\frac{\partial p}{\partial t}
++ \alpha\,\frac{\partial \varepsilon_v}{\partial t}
+= \nabla \cdot\!\left(\frac{k}{\mu}\,\nabla p\right) + Q.
+$$
+
+### 3. The coupling
+
+The two equations are joined by the two $\alpha$ terms — this is what makes the problem
+*multiphysics* rather than two separate solves:
+
+```mermaid
+flowchart LR
+  P["pore pressure p"]
+  U["displacement u"]
+  P -->|"effective stress −α∇p : pressure pushes the skeleton"| U
+  U -->|"dilation α ∂εv/∂t : deformation pressurises the fluid"| P
+```
+
+Because the coupling is two-way, the discrete system is solved monolithically with a full
+Jacobian (see [§6](#6-time-integration-and-solver)).
+
+### 4. Constitutive parameters
+
+The elastic constants follow from $E = 5$ GPa and $\nu = 0.3$; the poroelastic constants
+follow from those plus $\phi = 0.2$, $K_f = 2.1$ GPa, and $\alpha = 1$. These are computed in
+[`scripts/make_theory_figures.py`](scripts/make_theory_figures.py) and written to
+[`figures/derived_properties.csv`](figures/derived_properties.csv):
+
+| Quantity | Symbol | Expression | Value |
+|---|---|---|---|
+| Drained bulk modulus | $K$ | $E / 3(1-2\nu)$ | 4.167 GPa |
+| Shear modulus | $G$ | $E / 2(1+\nu)$ | 1.923 GPa |
+| First Lamé parameter | $\lambda$ | $K - \tfrac{2}{3}G$ | 2.885 GPa |
+| Constrained (oedometric) modulus | $K_v$ | $K + \tfrac{4}{3}G$ | 6.731 GPa |
+| Biot modulus | $M$ | $K_f / \phi$ | 10.5 GPa |
+| Storage coefficient | $S$ | $1/M + \alpha^2/K_v$ | $2.438\times10^{-10}$ Pa⁻¹ |
+
+$K_v$ and $S$ are the combinations that appear once displacement is eliminated under confined
+conditions — they set the diffusion speed in [§7](#7-dimensional-analysis-and-flow-regimes).
+
+### 5. Boundary, initial, and forcing conditions
+
+$$
+\begin{aligned}
+p &= 1\ \text{MPa}, \quad u_x = 0 && \text{on the left and right walls},\\
+u_y &= 0 && \text{on the base},\\
+\mathbf{q}\cdot\mathbf{n} &= g_{\text{inj}}(t) && \text{on the injection well},\\
+\mathbf{q}\cdot\mathbf{n} &= g_{\text{abs}}(t) = -g_{\text{inj}}(t) && \text{on the abstraction well},\\
+p &= 1\ \text{MPa}, \quad \mathbf{u} = \mathbf{0} && \text{everywhere at } t = 0.
+\end{aligned}
+$$
+
+The wells are `PorousFlowSink` flux boundaries driven by
+
+$$
+g_{\text{inj}}(t) = A\,\sin\!\left(\frac{2\pi t}{T}\right),
+\qquad
+A = 10^4 \cdot \frac{315\times10^{-6}}{2\pi\,r_w\,h}, \qquad T = 500\ \text{s},
+$$
+
+which is a volumetric cycle amplitude ($10^4 \cdot 315\times10^{-6} \approx 3.15$ m³ s⁻¹)
+spread over the well's cylindrical surface $2\pi r_w h$ ($r_w = 1$ m, screen length
+$h = 20$ m) to give a flux of peak magnitude $A \approx 0.025$. The two wells run in
+antiphase — while one injects, the other withdraws — so the pair drives a pressure wave
+back and forth across the domain.
+
+### 6. Time integration and solver
+
+Time is advanced with **backward (implicit) Euler**, unconditionally stable, so
+$\partial(\cdot)/\partial t \to \big[(\cdot)^{n+1} - (\cdot)^n\big]/\Delta t$ with all spatial
+terms taken at $t^{n+1}$.
+Each step is a nonlinear algebraic system $\mathbf{R}(\mathbf{U}) = \mathbf{0}$ in the
+combined unknown $\mathbf{U} = (p,\,u_x,\,u_y)$ at every node, solved by **Newton–Raphson**:
+
+$$
+\mathbf{J}\,\delta\mathbf{U} = -\mathbf{R},
+\qquad
+\mathbf{J} =
+\begin{bmatrix}
+\partial \mathbf{R}_p/\partial p & \partial \mathbf{R}_p/\partial \mathbf{u}\\[2pt]
+\partial \mathbf{R}_u/\partial p & \partial \mathbf{R}_u/\partial \mathbf{u}
+\end{bmatrix}.
+$$
+
+The **off-diagonal blocks are the poroelastic coupling**; capturing them is why the
+preconditioner is set to a Single-Matrix Preconditioner with `full = true` — it assembles the
+complete coupled Jacobian rather than a block-diagonal approximation. `solve_type = newton`
+with `nl_abs_tol = 1e-5`.
+
+### The discrete (weak) form
+
+Multiplying by test functions and integrating by parts once gives the residuals MOOSE
+actually assembles. For a displacement test function $\mathbf{w}$ and a pressure test
+function $\psi$:
+
+$$
+\mathbf{R}_u:\quad
+\int_\Omega \sigma' : \nabla\mathbf{w}\,dV
+\;-\; \int_\Omega \alpha\,p\,\nabla\cdot\mathbf{w}\,dV
+\;=\; \int_{\partial\Omega} (\sigma\,\mathbf{n})\cdot\mathbf{w}\,dS,
+$$
+
+$$
+\mathbf{R}_p:\quad
+\int_\Omega \psi\!\left(\frac{1}{M}\frac{\partial p}{\partial t}
++ \alpha\frac{\partial \varepsilon_v}{\partial t}\right)dV
+\;+\; \int_\Omega \nabla\psi \cdot \frac{k}{\mu}\nabla p \, dV
+\;=\; \int_{\partial\Omega} \psi\,g(t)\,dS .
+$$
+
+Each term maps to one MOOSE object, which is the entire "code" of the physics:
+
+| Weak-form term | MOOSE object |
+|---|---|
+| $\int \sigma':\nabla\mathbf{w}$ | `StressDivergenceTensors` |
+| $-\int \alpha p\,\nabla\cdot\mathbf{w}$ | `PorousFlowEffectiveStressCoupling` |
+| $\int \psi\,\tfrac{1}{M}\,\partial_t p$ | `PorousFlowMassTimeDerivative` |
+| $\int \psi\,\alpha\,\partial_t \varepsilon_v$ | `PorousFlowMassVolumetricExpansion` |
+| $\int \nabla\psi \cdot \tfrac{k}{\mu}\nabla p$ | `PorousFlowFullySaturatedDarcyFlow` |
+| well flux $\int \psi\,g(t)$ | `PorousFlowSink` |
+| far-field $p$, fixed $\mathbf{u}$ | `DirichletBC` |
+
+$\mathbb{Q}_1$ Lagrange elements interpolate all three fields on the triangular mesh.
+
+### 7. Dimensional analysis and flow regimes
+
+Eliminating displacement from the coupled system under confined conditions collapses the
+pressure equation to a diffusion equation, $\partial p/\partial t = c\,\nabla^2 p$, with
+**hydraulic diffusivity**
+
+$$
+c = \frac{k}{\mu\,S}, \qquad S = \frac{1}{M} + \frac{\alpha^2}{K_v}.
+$$
+
+The single dimensionless group that organises the whole permeability sweep compares the time
+for pressure to diffuse across the well spacing $L = 20$ m against the forcing period $T$ — a
+Deborah number:
+
+$$
+\mathrm{De} = \frac{\tau_{\text{diff}}}{T} = \frac{L^2}{c\,T} = \frac{\mu\,S\,L^2}{k\,T}.
+$$
+
+- $\mathrm{De} \ll 1$ — pressure equilibrates far faster than the wells cycle, so the field
+  stays near-uniform at the boundary value (gravel, karst, and the non-physical $10^{-3}$ case).
+- $\mathrm{De} \sim 1$ — diffusion and forcing are matched; the wells "communicate" within a
+  cycle and the travelling pressure wave is most developed (**medium sand**, $\mathrm{De}\approx2$).
+- $\mathrm{De} \gg 1$ — the signal cannot cross the domain in a cycle and stays trapped as
+  steep local gradients around each well (silt, clay).
+
+<p align="center">
+  <img src="figures/preview/regime_diagram.png" width="80%" alt="Deborah number vs permeability, with each case marked and the De=1 line separating equilibrated from trapped regimes">
+</p>
+
+The measured peak pore pressure follows this reading: it is pinned at the 1 MPa boundary for
+the high-permeability cases and rises as permeability falls and the fixed well flux must be
+driven through an ever-tighter medium. The **silt case ($10^{-16}$) is an outlier** — a
+~22 MPa local spike that breaks the otherwise monotone trend. This is the same "abnormal
+behaviour" the original author flagged in the analysis notebook; it is reported here rather
+than smoothed over, and is worth a dedicated look (mesh resolution at the well, or the
+fixed-flux boundary interacting with the near-impermeable medium).
+
+<p align="center">
+  <img src="figures/preview/peak_pressure_vs_k.png" width="80%" alt="Measured peak pore pressure vs permeability, showing the anomalous silt spike">
+</p>
+
 ## Results gallery
 
 All figures were produced by [`scripts/figures.sh`](scripts/figures.py) from the committed
@@ -85,10 +330,13 @@ pressure field changes character completely:
   <img src="figures/preview/plot_very_low_clay.png" width="47%" alt="Very low clay, k=1e-20">
 </p>
 
-Gravel (1×10⁻¹⁰, top left) barely departs from the 1 MPa boundary — fluid moves freely, so
-the cyclic forcing does not build pressure. Clay (1×10⁻²⁰, bottom right) traps the signal
-locally around each well. Silt (1×10⁻¹⁶, bottom left) is the interesting middle regime,
-where the travelling pressure wave between the wells is most pronounced.
+This is the [regime map](#7-dimensional-analysis-and-flow-regimes) made visible. Gravel
+(1×10⁻¹⁰, top left, De ≈ 2×10⁻³) barely departs from the 1 MPa boundary — fluid moves
+freely, so the cyclic forcing never builds pressure. Medium sand (1×10⁻¹³, top right,
+De ≈ 2) sits at the resonant regime where the wells communicate within a cycle and the
+travelling pressure wave is most developed. Silt (1×10⁻¹⁶, De ≈ 2×10³) and clay (1×10⁻²⁰,
+De ≈ 2×10⁷) are both in the trapped regime, holding the signal as steep local gradients
+around each well — with the silt case showing the anomalous pressure spike discussed above.
 
 **Anisotropy and directional blocking.** When permeability is high along one axis and low
 along the other, flow channels; `y_blocked` suppresses vertical flow entirely:
@@ -220,7 +468,8 @@ scripts/env.sh          activate it + rpath shim; sourced by the other scripts
 scripts/run.sh          run cases from cases.csv
 scripts/archive.py      raw sampler CSVs -> data/<case>.npz
 scripts/figures.sh      data/*.npz -> figures/
-scripts/make_readme_assets.py   the schematic, mesh render, and previews above
+scripts/make_readme_assets.py   the schematic, mesh render, forcing plot, and previews
+scripts/make_theory_figures.py  the regime diagram, peak-pressure plot, derived_properties.csv
 data/                   committed sampled results, one .npz per case
 figures/                figures and summary.csv, all regenerable from data/
 analysis/cyclic.ipynb   the original 2025 notebook, kept as a record

@@ -1,0 +1,18 @@
+quantity,symbol,value,units
+drained bulk modulus,K,4.1667e+09,Pa
+shear modulus,G,1.9231e+09,Pa
+constrained modulus,K_v,6.7308e+09,Pa
+Biot modulus,M,1.0500e+10,Pa
+storage coefficient,S,2.4381e-10,1/Pa
+hydraulic diffusivity (gravel),c,4.1016e+02,m^2/s
+Deborah number (gravel),De,1.9505e-03,-
+hydraulic diffusivity (sand),c,4.1016e-01,m^2/s
+Deborah number (sand),De,1.9505e+00,-
+hydraulic diffusivity (silt),c,4.1016e-04,m^2/s
+Deborah number (silt),De,1.9505e+03,-
+hydraulic diffusivity (clay),c,4.1016e-08,m^2/s
+Deborah number (clay),De,1.9505e+07,-
+hydraulic diffusivity (karst),c,4.1016e+05,m^2/s
+Deborah number (karst),De,1.9505e-06,-
+hydraulic diffusivity (extreme),c,4.1016e+09,m^2/s
+Deborah number (extreme),De,1.9505e-10,-
