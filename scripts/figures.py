@@ -10,10 +10,10 @@ can reproduce all of the study's figures in about a minute.
   scripts/figures.sh --table-only     # summary table, no plots
 
 Outputs into figures/:
-  plot_<case>.png                    3D pore pressure and displacement surfaces
-  comparison_pressure_t500.png       radial pressure profiles at t = 500 s
-  comparison_displacement_t500.png
-  summary.csv                        max/mean pressure and displacement per case
+  plot_<case>.png                    3D pore pressure and surface-uplift surfaces
+  comparison_pressure_t500.png       mid-depth pressure profiles at t = 500 s
+  comparison_displacement_t500.png   ground-surface uplift profiles at t = 500 s
+  summary.csv                        pressure, displacement and well-wall pressure per case
 """
 
 import argparse
@@ -47,8 +47,15 @@ def load(case):
         return None
     z = np.load(path, allow_pickle=False)
     meta = json.loads(str(z["meta"]))
-    return {"case": case, "meta": meta, "time": z["time"], "x": z["x"],
-            "pressure": z["pressure_vals"], "disp": z["disp_vals"]}
+    d = {"case": case, "meta": meta, "time": z["time"], "x": z["x"],
+         "pressure": z["pressure_vals"], "disp": z["disp_vals"]}
+    # Archives written before the September 2026 revision have neither the
+    # ground-surface samplers nor the well-wall postprocessors.
+    if "surface_vals" in z.files:
+        d["surface"] = z["surface_vals"]
+    if "wells" in z.files:
+        d["wells"] = dict(zip([str(c) for c in z["well_cols"]], z["wells"].T))
+    return d
 
 
 def label_for(d):
@@ -75,22 +82,25 @@ def plot_case(d):
     the full array, never from this decimated view.
     """
     step = max(1, len(d["time"]) // MAX_SURFACE_ROWS)
-    t, pressure, disp = d["time"][::step], d["pressure"][::step], d["disp"][::step]
+    # Right panel: ground-surface uplift when the archive has it; older archives
+    # only sampled displacement at mid-depth, and are labelled as such.
+    ukey, utitle = (("surface", "Ground-Surface Uplift vs. x vs. Time") if "surface" in d
+                    else ("disp", "Mid-Depth Vertical Displacement vs. x vs. Time"))
+    t = d["time"][::step]
     T, X = np.meshgrid(t, d["x"], indexing="ij")
-    d = {**d, "pressure": pressure, "disp": disp}
+    d = {**d, "pressure": d["pressure"][::step], ukey: d[ukey][::step]}
     perm = d["meta"].get("permeability", "")
     end_time = float(t.max())
 
     fig = plt.figure(figsize=(20, 10))
     for idx, (key, cmap, zlabel, title) in enumerate([
-        ("pressure", "viridis", "Pore Pressure (Pa)", "Pore Pressure vs. Radius vs. Time"),
-        ("disp", "plasma", "Vertical Displacement (m)",
-         "Surface Displacement vs. Radius vs. Time"),
+        ("pressure", "viridis", "Pore Pressure (Pa)", "Mid-Depth Pore Pressure vs. x vs. Time"),
+        (ukey, "plasma", "Vertical Displacement (m)", utitle),
     ]):
         ax = fig.add_subplot(1, 2, idx + 1, projection="3d")
         ax.plot_surface(T, X, d[key], cmap=cmap, linewidth=0, antialiased=True, alpha=0.9)
         ax.set_xlabel("Time (s)")
-        ax.set_ylabel("Radius (m)")
+        ax.set_ylabel("x (m)")
         ax.set_zlabel(zlabel, labelpad=-30)
         ax.set_title(f"{title}\nPermeability: {perm}")
         ax.set_xlim(0, end_time)
@@ -143,6 +153,14 @@ def main():
             "mean_pressure_Pa": float(np.nanmean(d["pressure"])),
             "max_disp_y_m": float(np.nanmax(d["disp"])),
             "mean_disp_y_m": float(np.nanmean(d["disp"])),
+            "max_surface_uplift_m": (float(np.nanmax(d["surface"])) if "surface" in d
+                                     else np.nan),
+            "min_surface_uplift_m": (float(np.nanmin(d["surface"])) if "surface" in d
+                                     else np.nan),
+            "max_wall_pressure_Pa": (max(float(np.nanmax(d["wells"][f"{w}_wall_p_max"]))
+                                         for w in ("inj", "abs")) if "wells" in d else np.nan),
+            "min_wall_pressure_Pa": (min(float(np.nanmin(d["wells"][f"{w}_wall_p_min"]))
+                                         for w in ("inj", "abs")) if "wells" in d else np.nan),
         })
         print(f"{case}: {d['meta']['n_steps']} steps x {d['meta']['n_x']} x-points")
         if not args.table_only:
@@ -157,12 +175,16 @@ def main():
         return 0
 
     order = {c: i for i, c in enumerate(COMPARISON)}
+    have_surface = all("surface" in loaded[c] for c in loaded if c in order)
     for key, ylabel, title, fname in [
         ("pressure", "Pore Pressure (Pa)",
-         f"Pore Pressure vs Radius at t = {TARGET_TIME:g} s", "comparison_pressure_t500.png"),
-        ("disp", "Vertical Displacement (m)",
-         f"Surface Displacement vs Radius at t = {TARGET_TIME:g} s",
-         "comparison_displacement_t500.png"),
+         f"Mid-Depth Pore Pressure vs x at t = {TARGET_TIME:g} s",
+         "comparison_pressure_t500.png"),
+        (("surface", "Vertical Displacement (m)",
+          f"Ground-Surface Uplift vs x at t = {TARGET_TIME:g} s") if have_surface else
+         ("disp", "Vertical Displacement (m)",
+          f"Mid-Depth Vertical Displacement vs x at t = {TARGET_TIME:g} s"))
+        + ("comparison_displacement_t500.png",),
     ]:
         drawn = 0
         plt.figure(figsize=(10, 5))
@@ -178,7 +200,7 @@ def main():
         if not drawn:
             plt.close()
             continue
-        plt.xlabel("Radius (m)")
+        plt.xlabel("x (m)")
         plt.ylabel(ylabel)
         plt.title(title)
         plt.legend()

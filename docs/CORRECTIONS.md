@@ -119,3 +119,145 @@ displacement use different names for two of them:
 The `x` coordinates written into each CSV are correct, and the analysis groups by `x`
 rather than by region, so no plotted result is wrong. But the `region` column should not
 be used to match a pressure sample to a displacement sample.
+
+---
+
+# Model corrections (September 2026)
+
+Items 1 to 6 are errors in how the original results were produced, labelled or
+archived; the model itself was untouched. Items 7 to 10 are errors in the **model**, found
+in September 2026 by checking the archived results against hand calculations. All four
+are fixed in `inputs/cycle.i` and the scripts, which changes the results, so the committed
+`data/` archives and `figures/` must be regenerated from the corrected input (see the note
+at the top of the README's results gallery). The evidence for each item below is taken
+from the archives as committed before the fix, so it can be re-checked from this
+repository.
+
+---
+
+## 7. The two wells run in the opposite sense to the one described
+
+**Severity: affects every figure's interpretation.**
+
+`PorousFlowSink` measures flux **out of** the rock. Its parameter documentation (MOOSE
+`modules/porous_flow/src/bcs/PorousFlowSink.C`) reads: "The flux is OUT of the medium: hence
+positive values of this function means this BC will act as a SINK, while negative values
+indicate this flux will be a SOURCE." The input gave the well labelled *injection* the
+positive function `+A sin(2πt/500)`, so for the first half of every cycle it **withdrew**
+fluid while the *abstraction* well injected.
+
+The archive shows it directly. In `medium_sand` at t = 125 s (a quarter-cycle, when the
+"injection" well should be at peak injection), pore pressure 1.5 m from the injection well
+wall (x = 13.5 m) is **0.317 MPa**, below the 1 MPa initial value, while 1.5 m from the
+abstraction well wall (x = 36.5 m) it is **1.386 MPa**. At t = 375 s the two swap.
+
+**Fix:** the injection well now carries `-A sin(2πt/500)` (a source during the first
+half-cycle) and the abstraction well `+A sin(2πt/500)`. For the symmetric cases this
+mirrors the old results about x = 25 m. For the cross-coupled tensors it does not, because
+those tensors are not symmetric under that reflection.
+
+---
+
+## 8. The initial state was not in equilibrium
+
+**Severity: dominates the displacement results; biases pressure in the tight cases.**
+
+Pore pressure starts at 1 MPa with zero displacement and no initial stress. Biot's
+effective-stress law makes the total stress σ = σ′ − α p I, so at t = 0 every boundary
+without a displacement condition (the ground surface and both well walls) carries an
+unbalanced 1 MPa. The first timestep is therefore a sudden elastic response to switching
+the pore pressure on, not to injection. For a laterally confined column this is an uplift of
+α p₀ y / K_v = 10⁶ × 12.5 / 6.73×10⁹ = **1.86 mm** at mid-depth.
+
+The archive matches that prediction. Across the twelve cases, the mean mid-depth
+displacement at the first timestep is already 1.43 to 1.86 mm. Everything that happens
+afterwards moves it by at most 0.96 mm, and that later change includes the slow drainage
+of the start-up transient, not only the wells. In `very_high_karst` and `extreme_1e-3` the
+displacement never changes after the first step: their entire displacement result (peak
+1.8577 mm) is the start-up artefact.
+
+The sudden load is also undrained, so it moves pore pressure. At the first timestep,
+pressure far from the wells (more than 4 m from either well centre) drops from 1.000 MPa to
+0.77 to 0.78 MPa in every case with k ≤ 10⁻¹³ m², and to 0.93 to 0.94 MPa in the
+gravel-like cases. Only karst and the 10⁻³ case drain within the first step. Sand and gravel
+recover during the run. Silt (0.781 MPa at t = 1000 s) and clay (0.773 MPa) never do. That
+offset is why clay's mean pressure in `summary.csv` sits 0.24 MPa below the value it
+started at.
+
+**Fix:** the in-situ effective stress is set to σ′₀ = α p₀ I (`ComputeEigenstrainFromInitialStress`,
++1 MPa, tension positive), so total stress is zero and the reference state is in
+equilibrium. Displacement is now measured from the in-situ state and responds only to
+the wells. This is the linear-poroelastic equivalent of solving for the pressure change
+from in-situ conditions, while keeping pressures in absolute terms so they stay comparable
+with the report.
+
+A remaining simplification, stated rather than changed: the well walls carry no fluid
+traction, so the change in total traction on them stays zero. A fluid-filled open hole
+would instead push on its wall with the change in well pressure. That effect is local to
+the wells.
+
+---
+
+## 9. "Surface displacement" was sampled at mid-depth
+
+**Severity: labelling, and a wrong physical reading.**
+
+The README, figure titles and report describe the displacement results as ground-surface
+displacement, and the axis as "radius". The displacement samplers sat on the line
+y = 12.5 m, through the wells, not on the ground surface at y = 25 m. The horizontal axis
+is the x coordinate along that line, not a radius from either well.
+
+**Fix:** a second set of `LineValueSampler`s records `disp_y` at y = 25 m. The archives
+store it as `surface_vals`, and the figures plot it as ground-surface uplift. The
+mid-depth samplers stay (`disp_vals`), and axes are labelled x. The sampler windows now
+share one naming scheme (`left`, `between`, `right`) across all fields, which also closes
+item 6.
+
+---
+
+## 10. The "silt anomaly" is a sampling artefact
+
+**Severity: a result explained, not an error in the numbers.**
+
+The original notebook flagged the silt case (k = 10⁻¹⁶ m²) as abnormal: a ~22 MPa peak
+that breaks an otherwise monotone rise in peak pressure as permeability falls, while clay
+(10⁻²⁰) peaks at only 1.34 MPa. The cause is where the peak was measured. The mid-depth
+samplers stop **0.5 m short of each well wall** (x = 13.5, 16.5, 33.5, 36.5 m, with the
+walls at 14, 16, 34 and 36 m). Over a half-cycle, the pressure signal diffuses about
+√(c · 250 s) into the rock, with c = k / (μ S):
+
+| case | k (m²) | c (m²/s) | diffusion length per half-cycle |
+|---|---|---|---|
+| medium sand | 10⁻¹³ | 0.41 | 10 m |
+| silt | 10⁻¹⁶ | 4.1×10⁻⁴ | **0.32 m** |
+| clay | 10⁻²⁰ | 4.1×10⁻⁸ | **3 mm** |
+
+In silt the signal just reaches the nearest sampler, so the sampler catches part of a very
+large near-wall pressure. In clay it never reaches the sampler at all. The pressure the
+wells actually impose keeps rising monotonically as k falls.
+
+An analytic check supports this. `scripts/make_theory_figures.py` uses the periodic
+solution for a single well with a sinusoidal wall flux in an infinite medium,
+p = Re{A K₀(λr) e^{iωt}} with λ = √(iω/c). It gives a wall-pressure amplitude of 0.51 MPa
+for sand, 42.5 MPa for silt and about 4,500 MPa for clay. Half a metre from the wall the
+amplitude is 0.42, 4.9 and ~0 MPa: it rises, peaks near k ≈ 10⁻¹⁵ to 10⁻¹⁶ and collapses,
+which is the shape of the "anomaly". For sand it is within about 25% of the archived sampler
+peak (0.52 MPa above in-situ). For silt the model's peak is about four times larger
+(21.7 MPa above in-situ). The analytic solution leaves out the start-up transient, the
+second well and the mechanical coupling, so it is a check on the trend, not on the
+magnitude. It assumes an infinite medium, so it is only valid up to k ≈ 10⁻¹³ m², where
+the diffusion length reaches the fixed-pressure side walls.
+
+Two consequences, both worth stating plainly:
+
+- A fixed-rate well in clay-like rock would need pressures far beyond any rock's fracture
+  strength (thousands of MPa at the wall). A real well in such rock either fractures the
+  formation or cannot sustain the rate. That is the case for stimulation in enhanced
+  geothermal systems.
+- The withdrawal half-cycle drives absolute pressure at the wall far below zero in the same
+  cases. That is outside what a single-phase, fully saturated model can represent.
+
+**Fix:** new postprocessors record the maximum, minimum and mean pore pressure on each well
+wall every timestep (`wells` in the archives, `max_wall_pressure_Pa` and
+`min_wall_pressure_Pa` in `summary.csv`), and `peak_pressure_vs_k.png` shows sampler peak,
+wall peak and the analytic curves together.

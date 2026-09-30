@@ -21,14 +21,32 @@ the pore-pressure and surface-displacement fields that result.
 > reset of an earlier version that kept **9 GB** of raw output and could not reproduce a
 > single figure without re-running everything — see [Output volume](#output-volume-the-reset).
 
+> **September 2026: model corrections, re-run pending.** Checking the archived results
+> against hand calculations turned up four errors in the model itself, now fixed in
+> [`inputs/cycle.i`](inputs/cycle.i) ([CORRECTIONS.md](docs/CORRECTIONS.md), items 7–10):
+> - The two wells ran in the opposite sense to the one described.
+> - The initial state was not in equilibrium, so most of the plotted "displacement" was
+>   a start-up artefact.
+> - "Surface" displacement was sampled at mid-depth.
+> - The "silt anomaly" is a sampling artefact.
+>
+> The committed `data/` archives and the results figures below still come from the
+> uncorrected model. Regenerate them with the commands in
+> [Running the simulations](#running-the-simulations). The theory figures and the new
+> [fractured-doublet mesh](#next-a-fractured-horizontal-doublet) are already current.
+
 ## Problem setup
 
 The domain is a 50 m × 25 m confined aquifer in plane strain. An injection well at
 x = 15 m and an abstraction well at x = 35 m, each 1 m in radius, sit at mid-depth. Both
 run on the same 500 s sinusoid but in antiphase — while one injects, the other withdraws.
 The left and right boundaries hold pressure at 1 MPa and pin horizontal displacement; the
-base is fixed vertically. Six line samplers record pore pressure and vertical displacement
-along the mid-depth line y = 12.5 m every timestep.
+base is fixed vertically. The rock starts in equilibrium with the 1 MPa pore pressure.
+
+Every timestep, the model records:
+- pore pressure and vertical displacement along the mid-depth line y = 12.5 m
+- vertical displacement along the ground surface, y = 25 m
+- maximum, minimum and mean pressure on each well wall
 
 <p align="center">
   <img src="figures/preview/domain_schematic.png" width="72%" alt="Domain schematic: 50x25 m aquifer, injection and abstraction wells, sampled line and boundary conditions">
@@ -37,15 +55,20 @@ along the mid-depth line y = 12.5 m every timestep.
 The mesh is graded — 2 m elements in the far field, refined to 0.25 m within 1 m of each
 well, where the pressure gradients are steepest. It is generated from
 [`mesh/cycle1.geo`](mesh/cycle1.geo), which reproduces the committed
-[`mesh/cycle1.msh`](mesh/cycle1.msh) byte-for-byte under gmsh 4.13.1.
+[`mesh/cycle1.msh`](mesh/cycle1.msh) byte-for-byte under gmsh 4.13.1 on macOS. The Linux
+build of the same gmsh version gives the same 1738 nodes and 3346 triangles, but
+floating-point noise in the node coordinates (~10⁻¹¹ m) changes the node ordering and the
+triangulation, so the file differs.
 
 <p align="center">
   <img src="figures/preview/mesh.png" width="72%" alt="gmsh mesh, 1738 nodes, refined near the two wells">
 </p>
 
-The wells are driven by a `PorousFlowSink` on each well boundary, with flux
-q(t) = ±10⁴ · (315×10⁻⁶ / (2π · 1 · 20)) · sin(2πt / 500), injection positive. Two full
-cycles run over the 1000 s simulation:
+The wells are driven by a `PorousFlowSink` on each well boundary. The mass flux *into the
+rock* is g(t) = ±10⁴ · (315×10⁻⁶ / (2π · 1 · 20)) · sin(2πt / 500) kg m⁻² s⁻¹, positive at
+the injection well during the first half-cycle. `PorousFlowSink` measures flux *out of*
+the rock, so the input carries the opposite sign. Two full cycles run over the 1000 s
+simulation:
 
 <p align="center">
   <img src="figures/preview/forcing.png" width="80%" alt="Well forcing: two antiphase 500-second cycles">
@@ -64,7 +87,8 @@ cycles run over the 1000 s simulation:
 | **BCs** | p = 1×10⁶ Pa and disp_x = 0 on left/right; disp_y = 0 on bottom |
 | **Time** | implicit Euler, dt = 0.5 s to t = 1000 s (2000 steps), Newton + full SMP |
 | **Size** | 5,214 nonlinear DOFs, 40,152 auxiliary DOFs |
-| **Sampling** | six `LineValueSampler`s at y = 12.5 m, 30 points each |
+| **In-situ state** | effective stress σ′₀ = α p₀ I, so total stress is in equilibrium with p₀ = 1 MPa |
+| **Sampling** | nine `LineValueSampler`s, 30 points each: p and u_y at y = 12.5 m, u_y at the surface y = 25 m; max/min/mean p on each well wall |
 
 ## Governing equations
 
@@ -192,9 +216,9 @@ $$
 \begin{aligned}
 p &= 1\ \text{MPa}, \quad u_x = 0 && \text{on the left and right walls},\\
 u_y &= 0 && \text{on the base},\\
-\mathbf{q}\cdot\mathbf{n} &= g_{\text{inj}}(t) && \text{on the injection well},\\
-\mathbf{q}\cdot\mathbf{n} &= g_{\text{abs}}(t) = -g_{\text{inj}}(t) && \text{on the abstraction well},\\
-p &= 1\ \text{MPa}, \quad \mathbf{u} = \mathbf{0} && \text{everywhere at } t = 0.
+-\rho\,\mathbf{q}\cdot\mathbf{n} &= g_{\text{inj}}(t) && \text{on the injection well},\\
+-\rho\,\mathbf{q}\cdot\mathbf{n} &= g_{\text{abs}}(t) = -g_{\text{inj}}(t) && \text{on the abstraction well},\\
+p &= 1\ \text{MPa}, \quad \mathbf{u} = \mathbf{0}, \quad \sigma' = \alpha\,p\,\mathbf{I} && \text{everywhere at } t = 0.
 \end{aligned}
 $$
 
@@ -206,11 +230,20 @@ g_{\text{inj}}(t) = A\,\sin\!\left(\frac{2\pi t}{T}\right),
 A = 10^4 \cdot \frac{315\times10^{-6}}{2\pi\,r_w\,h}, \qquad T = 500\ \text{s},
 $$
 
-which is a volumetric cycle amplitude ($10^4 \cdot 315\times10^{-6} \approx 3.15$ m³ s⁻¹)
-spread over the well's cylindrical surface $2\pi r_w h$ ($r_w = 1$ m, screen length
-$h = 20$ m) to give a flux of peak magnitude $A \approx 0.025$. The two wells run in
+with $\mathbf{n}$ the outward normal of the rock (pointing into the well), so $g > 0$ is
+fluid entering the rock. $A \approx 0.0251$ kg m⁻² s⁻¹ is a mass flux per unit wall
+area. On the 2π m² of wall per metre of borehole, that is about 0.16 kg s⁻¹ per metre out
+of plane. The $2\pi r_w h$ form (with a "screen length" $h = 20$ m) is inherited from the
+original study, which meant a volumetric rate over a vertical screen. In this
+plane-strain model only the resulting value of $A$ matters. The two wells run in
 antiphase — while one injects, the other withdraws — so the pair drives a pressure wave
 back and forth across the domain.
+
+The initial effective stress $\sigma' = \alpha p_0 \mathbf{I}$ makes the total stress
+zero, so the in-situ state is in equilibrium and the ground only moves in response to the
+wells. Without it, the unbalanced 1 MPa on the free boundaries produced a 1.4–1.9 mm jump
+at the first timestep, which the original study reported as displacement
+([CORRECTIONS.md](docs/CORRECTIONS.md), item 8).
 
 ### 6. Time integration and solver
 
@@ -299,23 +332,37 @@ $$
   <img src="figures/preview/regime_diagram.png" width="80%" alt="Deborah number vs permeability, with each case marked and the De=1 line separating equilibrated from trapped regimes">
 </p>
 
-The measured peak pore pressure follows this reading: it is pinned at the 1 MPa boundary for
-the high-permeability cases and rises as permeability falls and the fixed well flux must be
-driven through an ever-tighter medium. The **silt case ($10^{-16}$) is an outlier** — a
-~22 MPa local spike that breaks the otherwise monotone trend. This is the same "abnormal
-behaviour" the original author flagged in the analysis notebook; it is reported here rather
-than smoothed over, and is worth a dedicated look (mesh resolution at the well, or the
-fixed-flux boundary interacting with the near-impermeable medium).
+The pressure the wells impose follows this reading: it stays near the 1 MPa boundary value
+for the high-permeability cases and rises as permeability falls, because the fixed well
+flux must be driven through an ever-tighter medium. The original study measured the peak
+at the mid-depth samplers and found a **silt outlier**: a ~22 MPa spike that broke the
+trend, which the original author flagged as abnormal. It is a sampling artefact
+([CORRECTIONS.md](docs/CORRECTIONS.md), item 10):
+- The samplers stop 0.5 m short of each well wall.
+- The pressure signal diffuses only about 0.3 m into silt per half-cycle, and about 3 mm
+  into clay.
+- So the samplers catch part of the near-wall pressure in silt and none of it in clay.
+
+An analytic single-well solution (dashed below) reproduces that rise-and-collapse half a
+metre from the wall, while the pressure *at* the wall climbs monotonically. In tight rock
+it reaches values no rock could hold, which is why fixed-rate injection into low-permeability
+rock needs stimulation. The corrected model records the wall pressure directly.
 
 <p align="center">
-  <img src="figures/preview/peak_pressure_vs_k.png" width="80%" alt="Measured peak pore pressure vs permeability, showing the anomalous silt spike">
+  <img src="figures/preview/peak_pressure_vs_k.png" width="80%" alt="Peak pressure rise vs permeability at the samplers, with analytic curves at the well wall and 0.5 m from it">
 </p>
 
 ## Results gallery
 
+> **These figures predate the September 2026 corrections.** Each well's role is mirrored
+> (item 7), and the right-hand panels show *mid-depth* displacement dominated by the
+> start-up artefact (items 8 and 9), not ground-surface uplift. The horizontal axis is x,
+> not radius. The pressure patterns and the regime reading below hold qualitatively.
+> Re-running the sweep replaces them.
+
 All figures were produced by [`scripts/figures.sh`](scripts/figures.py) from the committed
-`data/` archives. Each per-case figure shows pore pressure (left) and vertical surface
-displacement (right) as surfaces over radius and time.
+`data/` archives. Each per-case figure shows pore pressure (left) and vertical displacement
+(right) as surfaces over x and time.
 
 **Isotropic permeability sweep.** As permeability drops from gravel to clay, the aquifer
 goes from near-instantaneous pressure equilibration to almost no through-flow, and the
@@ -357,6 +404,56 @@ two are correctly separated here — see [Corrections](#corrections-to-the-submi
   <img src="figures/preview/plot_very_high_karst.png" width="47%" alt="Genuine karst, k=1e-7">
   <img src="figures/preview/plot_extreme_1e-3.png" width="47%" alt="Extreme 1e-3, previously mislabeled as karst">
 </p>
+
+## Next: a fractured horizontal doublet
+
+The cyclic injection and withdrawal studied here is the same operation behind
+in-reservoir energy storage in enhanced geothermal systems. There, a horizontal
+injector–producer pair connected by hydraulic fractures is pressurised for hours, then
+produced ("charge" and "discharge"). The stored energy is fluid packed into fractures that
+open under pressure. The next model applies the machinery above to that geometry, and
+[`mesh/doublet.geo`](mesh/doublet.geo) is its mesh.
+
+<p align="center">
+  <img src="figures/preview/mesh_doublet.png" width="92%" alt="Plan-view mesh of one stimulation stage: two parallel laterals 111 m apart crossed by six transverse fractures, refined to 0.25 m along fractures and wells">
+</p>
+
+- **Design numbers from a real well pair.** Laterals 365 ft (111.25 m) apart, one 150 ft
+  stage with 6 perforation clusters at 25 ft (7.62 m). These are the Project Red design
+  values reported by Norbeck & Latimer (2023, Stanford Geothermal Workshop). How far each
+  fracture reaches past the wells (30 m here) is an assumption.
+- **The right plane.** Transverse fractures are vertical planes perpendicular to the
+  laterals. A section perpendicular to the laterals (like `cycle1.geo`, where the wells
+  are circles) would lie *inside* a fracture plane. This mesh is therefore a horizontal
+  section through both laterals: the fractures are lines crossing between them, and the
+  out-of-plane thickness is the fracture height.
+- **Mixed-dimensional and conforming.** Fractures and laterals are 1D line elements that
+  share nodes with the 2D matrix triangles. That is the form MOOSE PorousFlow needs to
+  model explicit fracture flow in one fully implicit solve, without MultiApps. Blocks are
+  `matrix`, `fracture`, `injector` and `producer`; the sidesets are the four walls; the
+  nodesets `inj_perfs` and `prod_perfs` are the 12 points where fractures cross the
+  laterals.
+- **Symmetry element.** The side walls sit half a cluster spacing from the outer
+  fractures, so they are symmetry planes between repeating stages.
+- **Resolved leak-off.** Elements are 0.25 m along fractures and wells, and grade to 15 m
+  in the far field (55,056 nodes, 109,676 triangles). In rock of k ≈ 10⁻¹⁸ m², leak-off
+  from a fracture penetrates only ~0.4 m during a 12-hour charge, so it needs that
+  resolution.
+
+libMesh only keeps a 1D gmsh group as an element block, rather than turning it into a
+sideset, if the group's `$PhysicalNames` line carries the tag `lower_dimensional_block`.
+[`scripts/make_doublet_mesh.sh`](scripts/make_doublet_mesh.sh) runs gmsh, adds that tag,
+and then runs [`scripts/check_doublet_mesh.py`](scripts/check_doublet_mesh.py). The checker
+reads the file the way libMesh's reader does and verifies:
+- the tagging, and that every fracture and well element is an edge of the matrix mesh
+- that each perforation node is shared by fracture, well and matrix
+- that the walls lie where expected, with no duplicate nodes
+- triangle quality (minimum angle 30°)
+
+The committed `mesh/doublet.msh` was built with gmsh 4.13.1 on Linux (conda-forge). The
+physics input that runs on this mesh (fracture storage, pressure-dependent fracture
+permeability, and 12-hour charge and discharge cycles under a wellhead pressure limit) is
+the next step.
 
 ## Cases
 
@@ -433,6 +530,11 @@ Verified: all twelve archives, and a fully fresh re-simulation of four of them, 
 the previous pipeline's results **bit-for-bit** — identical to the last digit and matching
 at the MD5 level, including the report's own reference value of 1335587.1563765 Pa.
 
+The sizes and the bit-for-bit check above are for the original model. The September 2026
+corrections change the physics, so new archives will differ from the report by design.
+They also add three ground-surface samplers and the well-wall series, so expect each
+archive to be roughly half again as large.
+
 <details>
 <summary><b>What was tried and rejected</b></summary>
 
@@ -460,8 +562,10 @@ at the MD5 level, including the report's own reference value of 1335587.1563765 
 ```
 inputs/cycle.i          the single input; cases differ only by command-line override
 cases.csv               case table: permeability, dt, tolerances, labels
-mesh/cycle1.geo         gmsh source; regenerates cycle1.msh byte-for-byte
+mesh/cycle1.geo         gmsh source; regenerates cycle1.msh byte-for-byte (macOS gmsh 4.13.1)
 mesh/cycle1.msh
+mesh/doublet.geo        fractured horizontal doublet, one stage, plan view (next model)
+mesh/doublet.msh        its mixed-dimensional mesh, tagged for libMesh
 src/ include/ test/     the MOOSE app (stork scaffold, no custom C++)
 scripts/setup.sh        create the miniforge environment
 scripts/env.sh          activate it + rpath shim; sourced by the other scripts
@@ -470,6 +574,8 @@ scripts/archive.py      raw sampler CSVs -> data/<case>.npz
 scripts/figures.sh      data/*.npz -> figures/
 scripts/make_readme_assets.py   the schematic, mesh render, forcing plot, and previews
 scripts/make_theory_figures.py  the regime diagram, peak-pressure plot, derived_properties.csv
+scripts/make_doublet_mesh.sh    doublet.geo -> doublet.msh, tagged, checked, drawn
+scripts/check_doublet_mesh.py   validates doublet.msh the way libMesh reads it
 data/                   committed sampled results, one .npz per case
 figures/                figures and summary.csv, all regenerable from data/
 analysis/cyclic.ipynb   the original 2025 notebook, kept as a record
@@ -529,6 +635,27 @@ folds them into `data/<case>.npz`, and deletes the raw files. Cases are independ
 solves, so `--jobs N` scales nearly linearly — three concurrent cases finished in 310 s
 versus ~870 s sequentially on a 10-core machine.
 
+To regenerate everything after the September 2026 corrections (the full sweep, then every
+figure, table and README image):
+
+```bash
+source scripts/env.sh
+scripts/run.sh --jobs 4
+scripts/figures.sh
+"$MOOSE_PYTHON" scripts/make_theory_figures.py
+"$MOOSE_PYTHON" scripts/make_readme_assets.py
+```
+
+### Building the doublet mesh
+
+```bash
+scripts/make_doublet_mesh.sh           # gmsh -> tag -> check -> figures/mesh_doublet.png  (~5 s)
+./borehole1-opt -i inputs/doublet_mesh_check.i --mesh-only   # optional: load it in MOOSE
+```
+
+The second command reads the mesh through MOOSE and writes `inputs/doublet_mesh_check_in.e`. Open
+that in ParaView to see the `fracture`, `injector` and `producer` blocks alongside `matrix`.
+
 ## Troubleshooting
 
 **`Library not loaded: @rpath/libgfortran.5.dylib ... (duplicate LC_RPATH '@loader_path')`**
@@ -558,6 +685,15 @@ the same output directory, so the figure captioned as karst (k = 1×10⁻⁷) ac
 k = 1×10⁻³. Re-running both cases and comparing against the archived output settles it — the
 archived data is bit-identical to the 1×10⁻³ run. The figures here have the two cases
 correctly separated.
+
+Items 7–10 of the same file are errors in the model rather than in how it was run or
+labelled:
+- well flux signs reversed
+- an unbalanced initial state
+- "surface" displacement sampled at mid-depth
+- the silt anomaly explained as a sampling artefact
+
+They are fixed in the input and scripts, and the committed results are pending a re-run.
 
 ## License
 

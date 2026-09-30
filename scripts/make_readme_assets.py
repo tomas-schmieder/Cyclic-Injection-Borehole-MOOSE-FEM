@@ -65,12 +65,15 @@ def schematic():
     fig, ax = plt.subplots(figsize=(10, 5.4))
     ax.add_patch(Rectangle((0, 0), W, H, fill=False, lw=2, ec="#222"))
 
-    # sampled line at mid-depth, drawn as the three sampler windows
-    for x0, x1 in [(0, 13.5), (16.5, 33.5), (36.5, 50)]:
-        ax.plot([x0, x1], [YC, YC], color="#1f9e6e", lw=2.5, solid_capstyle="round", zorder=3)
-    ax.scatter(np.concatenate([np.linspace(a, b, 8) for a, b in
-                               [(0, 13.5), (16.5, 33.5), (36.5, 50)]]),
-               [YC] * 24, s=9, color="#1f9e6e", zorder=4)
+    # sampled lines, each drawn as the three sampler windows: mid-depth
+    # (pressure and displacement) and ground surface (uplift)
+    for yline, col in [(YC, "#1f9e6e"), (H, "#8e44ad")]:
+        for x0, x1 in [(0, 13.5), (16.5, 33.5), (36.5, 50)]:
+            ax.plot([x0, x1], [yline, yline], color=col, lw=2.5, solid_capstyle="round",
+                    zorder=3)
+        ax.scatter(np.concatenate([np.linspace(a, b, 8) for a, b in
+                                   [(0, 13.5), (16.5, 33.5), (36.5, 50)]]),
+                   [yline] * 24, s=9, color=col, zorder=4)
 
     inj = Circle((XI, YC), RW, facecolor="#2c6fbb", edgecolor="#123", lw=1.5, zorder=5)
     absw = Circle((XA, YC), RW, facecolor="#c0392b", edgecolor="#123", lw=1.5, zorder=5)
@@ -87,8 +90,12 @@ def schematic():
     ax.text(-1.2, YC, "p = 1 MPa\n$u_x$ = 0", ha="right", va="center", fontsize=9, color="#444")
     ax.text(W + 1.2, YC, "p = 1 MPa\n$u_x$ = 0", ha="left", va="center", fontsize=9, color="#444")
     ax.text(W / 2, -1.6, "$u_y$ = 0", ha="center", va="top", fontsize=9, color="#444")
-    ax.text(W / 2, YC - 3.4, "sampled line, y = 12.5 m", ha="center", va="top",
-            fontsize=9, color="#1f9e6e")
+    ax.text(W / 2, YC - 3.4, "mid-depth samplers, y = 12.5 m (p, $u_y$)", ha="center",
+            va="top", fontsize=9, color="#1f9e6e")
+    ax.text(W / 2, H + 1.0, "ground-surface samplers, y = 25 m ($u_y$)", ha="center",
+            va="bottom", fontsize=9, color="#8e44ad")
+    ax.text(W / 2, YC + 1.6, "well walls: max / min / mean p", ha="center", va="bottom",
+            fontsize=8.5, color="#555")
 
     ax.set_xlim(-7, W + 7)
     ax.set_ylim(-5, H + 6)
@@ -135,7 +142,7 @@ def forcing_figure():
     for c in range(1, 2):
         ax.axvline(500 * c, color="#ccc", lw=0.8, ls="--")
     ax.set_xlabel("time (s)")
-    ax.set_ylabel("flux  q(t)")
+    ax.set_ylabel("mass flux into rock\n(kg m$^{-2}$ s$^{-1}$)")
     ax.set_title("Well forcing: two 500 s cycles, wells in antiphase")
     ax.set_xlim(0, 1000)
     ax.legend(loc="upper right", fontsize=9)

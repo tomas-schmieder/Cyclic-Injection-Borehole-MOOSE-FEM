@@ -3,7 +3,8 @@
 Theory figures for the README:
 
   figures/regime_diagram.png     hydraulic-diffusion regime map (Deborah number vs k)
-  figures/peak_pressure_vs_k.png measured peak pore pressure vs permeability
+  figures/peak_pressure_vs_k.png peak pressure rise vs permeability, at the samplers
+                                 and at the well walls, with an analytic reference
   figures/derived_properties.csv poroelastic constants derived from the inputs
 
 These turn the dimensional analysis in the README into pictures and tie the
@@ -116,36 +117,96 @@ def regime_diagram():
     return out
 
 
+RW = 1.0                                             # well radius, m
+Q0 = 1e4 * 315e-6 / (2.0 * np.pi * RW * 20.0)        # wall mass-flux amplitude, kg m^-2 s^-1
+RHO = 1000.0                                         # fluid density, kg/m^3
+R_SAMPLER = RW + 0.5                                 # nearest sampler: 0.5 m off each wall
+
+
+def analytic_amplitude(k, r):
+    """Pressure amplitude around one well with a sinusoidal wall flux, in Pa.
+
+    Periodic steady state of p_t = c lap(p) in an infinite plane around a
+    cylinder of radius RW carrying mass flux Q0 sin(wt) on its wall:
+        p = Re{ A K0(lam r) e^{iwt} },  lam = sqrt(iw/c),
+        A = Q0 mu / (rho k lam K1(lam RW)).
+    Ignores the second well, the domain boundaries, the start-up transient and
+    the mechanical coupling, so it is an order-of-magnitude reference, not a
+    prediction of the coupled model. Needs scipy (Bessel functions of complex
+    argument); returns None without it.
+    """
+    try:
+        from scipy.special import kve
+    except ImportError:
+        return None
+    k = np.asarray(k, dtype=float)
+    lam = np.sqrt(1j * (2.0 * np.pi / T) / diffusivity(k))
+    # Exponentially scaled Bessel functions, kve(n, z) = kv(n, z) e^z, so that
+    # K0(lam r) / K1(lam RW) stays finite in tight rock where both underflow.
+    ratio = kve(0, lam * r) / kve(1, lam * RW) * np.exp(-lam * (r - RW))
+    return np.abs(Q0 * MU / (RHO * k * lam) * ratio)
+
+
 def peak_pressure_vs_k():
-    summ = {}
+    """Peak pressure rise vs k: at the nearest sampler, at the well wall, and analytic.
+
+    The mid-depth samplers stop 0.5 m short of each well wall. The pressure the
+    wells impose rises monotonically as k falls, but in tight rock it decays to
+    nothing within that 0.5 m, so the sampler peak rises, tops out near
+    k ~ 1e-15 to 1e-16 (silt), and collapses again. That is the "silt anomaly"
+    of the original study. Archives from before the September 2026 revision
+    have no well-wall data; the wall curve is then drawn from the analytic
+    solution alone.
+    """
+    samp, wall = {}, {}
     with open(os.path.join(FIGS, "summary.csv")) as fh:
         for row in csv.DictReader(fh):
-            summ[row["case"]] = float(row["max_pressure_Pa"])
+            samp[row["case"]] = float(row["max_pressure_Pa"])
+            w = row.get("max_wall_pressure_Pa", "")
+            if w not in ("", "nan"):
+                wall[row["case"]] = float(w)
     case_k = {"high_gravel": 1e-10, "medium_sand": 1e-13, "low_silt": 1e-16,
               "very_low_clay": 1e-20, "very_high_karst": 1e-7, "extreme_1e-3": 1e-3}
-    pts = sorted(((k, summ[c], c) for c, k in case_k.items() if c in summ))
-    ks = [p[0] for p in pts]
-    ps = [p[1] / 1e6 for p in pts]
+    p0 = 1e6
+    floor = 1e-9  # MPa; keeps rises of ~0 Pa visible on a log axis
 
-    fig, ax = plt.subplots(figsize=(10, 5.2))
-    ax.axhline(1.0, color="#888", ls=":", lw=1.2, label="boundary pressure (1 MPa)")
-    ax.plot(ks, ps, "-o", color="#2c6fbb", lw=1.8, ms=7, zorder=3)
-    for k, p, c in pts:
-        ax.annotate(c.replace("_", " "), (k, p / 1e6), textcoords="offset points",
-                    xytext=(6, 6), fontsize=8.5)
-    # flag the silt anomaly noted by the original author
-    ax.annotate("anomalous local buildup\n(flagged by original author)",
-                (1e-16, summ["low_silt"] / 1e6), textcoords="offset points",
-                xytext=(20, -35), fontsize=9, color="#c0392b",
-                arrowprops=dict(arrowstyle="->", color="#c0392b"))
+    def rise(v):
+        return max((v - p0) / 1e6, floor)
+
+    fig, ax = plt.subplots(figsize=(10, 5.6))
+    # The analytic solution assumes an infinite medium, which holds while the
+    # periodic diffusion length sqrt(c T / 2 pi) is shorter than the ~14 m from
+    # each well to the fixed-pressure side walls: k up to ~1e-13 m^2. Above
+    # that the side walls bleed pressure off and it overestimates by 2-5x.
+    ks_a = np.logspace(-20.5, -12.5, 300)
+    a_wall = analytic_amplitude(ks_a, RW)
+    if a_wall is not None:
+        a_samp = analytic_amplitude(ks_a, R_SAMPLER)
+        ax.plot(ks_a, np.maximum(a_wall / 1e6, floor), color="#c0392b", lw=1.2, ls="--",
+                label="analytic, at the well wall (single well, periodic)")
+        ax.plot(ks_a, np.maximum(a_samp / 1e6, floor), color="#2c6fbb", lw=1.2, ls="--",
+                label="analytic, 0.5 m from the wall (nearest sampler)")
+
+    pts = sorted((k, c) for c, k in case_k.items() if c in samp)
+    ax.plot([k for k, _ in pts], [rise(samp[c]) for _, c in pts], "o-", color="#2c6fbb",
+            lw=1.8, ms=7, zorder=3, label="model, peak at the mid-depth samplers")
+    wpts = [(k, c) for k, c in pts if c in wall]
+    if wpts:
+        ax.plot([k for k, _ in wpts], [rise(wall[c]) for _, c in wpts], "s-", color="#c0392b",
+                lw=1.8, ms=7, zorder=3, label="model, peak on the well walls")
+    for k, c in pts:
+        ax.annotate(c.replace("_", " "), (k, rise(samp[c])), textcoords="offset points",
+                    xytext=(6, -12), fontsize=8.5)
 
     ax.set_xscale("log")
     ax.set_yscale("log")
+    ax.set_xlim(1e-21, 1e-2)
+    ax.set_ylim(floor / 3, 1e5)
     ax.set_xlabel("isotropic permeability  $k$  (m$^2$)")
-    ax.set_ylabel("peak pore pressure  (MPa)")
-    ax.set_title("Measured peak pore pressure vs permeability (isotropic cases)")
+    ax.set_ylabel("peak pressure rise above 1 MPa  (MPa)")
+    ax.set_title("Peak pressure vs permeability: where it is measured decides the trend")
     ax.grid(True, which="major", alpha=0.25)
-    ax.legend(loc="upper right", fontsize=9)
+    ax.legend(loc="upper right", fontsize=8.5)
     fig.tight_layout()
     out = os.path.join(FIGS, "peak_pressure_vs_k.png")
     fig.savefig(out, dpi=150, bbox_inches="tight")

@@ -38,7 +38,7 @@ else
   "$MAMBA" create -n "$MOOSE_ENV" -y \
     -c https://conda.software.inl.gov/public -c conda-forge \
     "moose-dev=$MOOSE_VERSION" \
-    numpy pandas matplotlib netcdf4
+    numpy pandas matplotlib netcdf4 scipy "gmsh=4.13.1"
 fi
 
 echo

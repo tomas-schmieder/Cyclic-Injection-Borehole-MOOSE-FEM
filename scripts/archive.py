@@ -2,8 +2,8 @@
 """
 Fold a case's per-timestep sampler CSVs into a single compressed .npz archive.
 
-MOOSE writes one CSV per VectorPostprocessor per timestep: six samplers over
-2000 steps is 12,000 files and ~20 MB, and the Exodus field file on top of that
+MOOSE writes one CSV per VectorPostprocessor per timestep: nine samplers over
+2000 steps is 18,000 files and ~30 MB, and the Exodus field file on top of that
 takes a full case to ~758 MB. Almost none of that is information -- the whole
 study needs only pore pressure and vertical displacement as a function of x and
 time. Reshaped into two dense arrays and compressed, one case is ~2.6 MB, a 293x
@@ -16,16 +16,19 @@ reduction with no data loss.
 Archive contents (float64 throughout -- float32 is half the size but cannot
 resolve the ~1e-7 Pa differences that distinguish the high-permeability cases):
 
-  pressure_vals   (n_steps, n_x)  pore pressure, Pa
-  disp_vals       (n_steps, n_x)  vertical displacement, m
+  pressure_vals   (n_steps, n_x)  pore pressure at mid-depth (y = 12.5 m), Pa
+  disp_vals       (n_steps, n_x)  vertical displacement at mid-depth, m
+  surface_vals    (n_steps, n_x)  vertical displacement at the ground surface (y = 25 m), m
+  wells           (n_steps, 6)    well-wall pore pressure, Pa; columns in well_cols
+  well_cols       (6,)            inj/abs x max/min/avg postprocessor names
   steps           (n_steps,)      timestep index
   time            (n_steps,)      simulation time, s
-  x               (n_x,)          sample position along y = 12.5 m, m
+  x               (n_x,)          sample position, m
   meta            json blob: case name, permeability, dt, source file count
 
-The three sampler windows are merged on the x axis. The original region labels
-are deliberately dropped: they are inconsistent between the two fields (see
-docs/CORRECTIONS.md), while x is always correct.
+The three sampler windows are merged on the x axis; x is the key, not the
+region name (the original study's names were inconsistent between fields --
+see docs/CORRECTIONS.md, item 6).
 """
 
 import argparse
@@ -40,7 +43,9 @@ import numpy as np
 import pandas as pd
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIELDS = {"pressure": "porepressure", "disp": "disp_y"}
+FIELDS = {"pressure": "porepressure", "disp": "disp_y", "surface": "disp_y"}
+WELL_COLS = ["inj_wall_p_max", "inj_wall_p_min", "inj_wall_p_avg",
+             "abs_wall_p_max", "abs_wall_p_min", "abs_wall_p_avg"]
 _STEP_RX = re.compile(r"_(\d+)\.csv$")
 
 
@@ -88,6 +93,30 @@ def load_field(case_dir, kind, column, stride):
     return steps, xs, vals, n_files
 
 
+def load_wells(case_dir, times):
+    """Well-wall postprocessors from the scalar CSV (output.csv), one row per time.
+
+    Rows are matched to the sampler timesteps by simulation time rather than by
+    position, so an extra t = 0 row or a strided archive cannot misalign them.
+    """
+    path = os.path.join(case_dir, "output.csv")
+    if not os.path.exists(path):
+        raise SystemExit(f"{path}: missing -- the well-wall postprocessors were not written")
+    df = pd.read_csv(path)
+    missing = [c for c in WELL_COLS if c not in df.columns]
+    if missing:
+        raise SystemExit(f"{path}: missing columns {missing}")
+    t = df["time"].to_numpy(dtype=np.float64)
+    idx = np.clip(np.searchsorted(t, times), 0, t.size - 1)
+    lower = np.clip(idx - 1, 0, t.size - 1)
+    idx = np.where(np.abs(t[lower] - times) < np.abs(t[idx] - times), lower, idx)
+    worst = float(np.max(np.abs(t[idx] - times)))
+    if worst > 1e-6 * max(1.0, float(times.max())):
+        raise SystemExit(f"{path}: no scalar row within tolerance of every sampled time "
+                         f"(worst mismatch {worst:g} s) -- incomplete run?")
+    return df[WELL_COLS].to_numpy(dtype=np.float64)[idx]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -128,14 +157,17 @@ def main():
 
     out["steps"] = ref_steps
     out["time"] = ref_steps.astype(np.float64) * dt
+    out["wells"] = load_wells(case_dir, out["time"])
+    out["well_cols"] = np.array(WELL_COLS)
     out["x"] = ref_x
     meta["n_steps"] = int(ref_steps.size)
     meta["n_x"] = int(ref_x.size)
     meta["source_csv_files"] = total_files
     out["meta"] = np.array(json.dumps(meta))
 
-    raw_bytes = sum(os.path.getsize(f)
-                    for f in glob.glob(os.path.join(case_dir, "output_*_[0-9]*.csv")))
+    raw_files = glob.glob(os.path.join(case_dir, "output_*_[0-9]*.csv"))
+    raw_files.append(os.path.join(case_dir, "output.csv"))
+    raw_bytes = sum(os.path.getsize(f) for f in raw_files)
 
     data_dir = os.path.join(REPO, "data")
     os.makedirs(data_dir, exist_ok=True)
@@ -150,7 +182,7 @@ def main():
 
     if not args.keep_raw:
         removed = 0
-        for f in glob.glob(os.path.join(case_dir, "output_*_[0-9]*.csv")):
+        for f in raw_files:
             os.remove(f)
             removed += 1
         for cp in glob.glob(os.path.join(case_dir, "*_cp")):
